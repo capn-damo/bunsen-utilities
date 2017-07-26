@@ -51,6 +51,7 @@ SESSIONFILE="$CONKYPATH/conky-sessionfile"
 SESSIONS="$CONKYPATH/saved-sessions"    # to be used by a pipemenu
 CRC="$HOME/.conkyrc"
 BLDEFAULT="$CONKYPATH/BL-Default.conkyrc"
+FINISH=1
 
 USAGE1='
 	USAGE:	bl-conkyzen [OPTION]...FILES
@@ -190,6 +191,96 @@ writeSessions(){    # save a new sessionfile name for use by a menu
         echo "$SESSIONFILE" >> "$SESSIONS"
     fi
 }
+
+conkyChooser() {
+	unset FINISH
+	# test for ~/.conkyrc, create a link to the default conky if necessary
+	if ! [[ -e $CRC ]];then
+	    if [[ -e $BLDEFAULT ]];then
+	        ln -s "$BLDEFAULT" "$CRC"
+	    else
+	        echo "Default conkyrc not found"
+	    fi
+	fi
+	
+	# get conky directories in .conky, add to array
+	conkyRunning
+	findConky
+	
+	# loop through arrays, and build list text for yad dialog
+	unset LISTCONKY
+	for ((j=0; j<${#conkysArr[*]}; j++));do
+	  LISTCONKY="$LISTCONKY${checkArr[j]} ${conkysArr[j]} "
+	done
+	
+	while ! [[ $RET ]];do
+	    ## Populate dialog from array, get return value(s)
+	    RET=$($DLGDEC $WINICON --list --title="$TITLE" \
+	        --text="Session will be saved to:\n <b>$SESSIONFILE</b>" \
+	        --checklist --width=400 --height=500 --multiple \
+	        --column="Select:CHK" --column="Conky Name:TXT" $LISTCONKY \
+	        --separator=":" \
+	        $OK $CANCEL --button=Finish:2\
+	        )
+	
+	    if [[ $? == 1 ]]; then # cancel button pressed
+	        # restore previous saved-sessions file
+	        [[ -f $SESSIONS.bkp ]] && mv "$SESSIONS.bkp" "$SESSIONS"
+	        rm "$TEMPFILE"
+	        #exit 0
+	        conkyChooser
+	    fi
+	    if [[ $? == 2 ]];then
+			FINISH=0
+	    fi
+	    if ! [[ $RET ]];then  # No conkys chosen
+	        MSG="Nothing chosen.\n\nKill any running Conkys\nand exit?"
+	        $DLG $WINICON --title="Conky Chooser" --text="$MSG" --button=Exit:0 $CANCEL
+	        if [[ $? = 1 ]];then
+	            # restore previous saved-sessions file
+	            mv "$SESSIONS.bkp" "$SESSIONS"
+	            rm "$TEMPFILE"
+	            conkyChooser
+	        else
+	            killall conky
+	            exit 0
+	        fi
+	    else
+	        > "$SESSIONFILE"    # Create new session file
+	        # loop through returned choices, add to array
+	        i=0
+	        OIFS=$IFS   # save Internal Field Separator
+	        IFS=":"     # separator is ":" in returned choices
+	        for name in $RET; do
+	            retConky[$i]="$name"
+	            i=$(($i+1))
+	        done
+	        IFS=$OIFS   # reset IFS back to default
+	
+	        # kill all conkys
+	        if [[ $(pidof conky) ]];then
+	            killall conky
+	        fi
+
+	        # Find the chosen conkys and start them
+	        for name in ${retConky[*]};do       # loop through checkmarked conky names
+	            for ((j=0; j<${#conkysPath[*]}; j++));do  # traverse through elements
+	                for f in ${conkysPath[j]};do    # compare with choice from dialog
+	                    display=$( echo "$f" | awk -F"/" '{print $(NF-1)"/"$NF}')
+	                    if [[ $display = $name ]];then
+	                        echo -e "conky -c $f & sleep 1s" >> "$SESSIONFILE"
+	                        #start the conky (adjust the sleep time if required)
+	                        conky -c "$f" & sleep 1s
+	                    fi
+	                done
+	            done
+	        done
+	        echo "FLAG= $FINISH"
+	        FINISH=1
+	    fi
+	done
+}
+
 ######## END FUNCTIONS #################################################
 
 # get args passed to script (session can be saved to a different file)
@@ -236,85 +327,12 @@ for arg in "$@";do
     esac
 done
 
-# test for ~/.conkyrc, create a link to the default conky if necessary
-if ! [[ -e $CRC ]];then
-    if [[ -e $BLDEFAULT ]];then
-        ln -s "$BLDEFAULT" "$CRC"
-    else
-        echo "Default conkyrc not found"
-    fi
-fi
+	        echo "FLAG= $FINISH"
 
-# get conky directories in .conky, add to array
-conkyRunning
-findConky
-
-# loop through arrays, and build list text for yad dialog
-unset LISTCONKY
-for ((j=0; j<${#conkysArr[*]}; j++));do
-  LISTCONKY="$LISTCONKY${checkArr[j]} ${conkysArr[j]} "
+while ! $FINISH;do
+	conkyChooser
 done
 
-while ! [[ $RET ]];do
-    ## Populate dialog from array, get return value(s)
-    RET=$($DLGDEC $WINICON --list --title="$TITLE" \
-        --text="Session will be saved to:\n <b>$SESSIONFILE</b>" \
-        --checklist --width=400 --height=500 --multiple \
-        --column="Select:CHK" --column="Conky Name:TXT" $LISTCONKY \
-        --separator=":" \
-        $OK $CANCEL \
-        )
-
-    if [[ $? == 1 ]]; then # cancel button pressed
-        # restore previous saved-sessions file
-        [[ -f $SESSIONS.bkp ]] && mv "$SESSIONS.bkp" "$SESSIONS"
-        rm "$TEMPFILE"
-        exit 0
-    fi
-    if ! [[ $RET ]];then  # No conkys chosen
-        MSG="Nothing chosen.\n\nKill any running Conkys\nand exit?"
-        $DLG $WINICON --title="Conky Chooser" --text="$MSG" $OK $CANCEL
-        if [[ $? = 1 ]];then
-            # restore previous saved-sessions file
-            mv "$SESSIONS.bkp" "$SESSIONS"
-            rm "$TEMPFILE"
-            continue
-        else
-            killall conky
-            exit 0
-        fi
-    else
-        > "$SESSIONFILE"    # Create new session file
-        # loop through returned choices, add to array
-        i=0
-        OIFS=$IFS   # save Internal Field Separator
-        IFS=":"     # separator is ":" in returned choices
-        for name in $RET; do
-            retConky[$i]="$name"
-            i=$(($i+1))
-        done
-        IFS=$OIFS   # reset IFS back to default
-
-        # kill all conkys
-        if [[ $(pidof conky) ]];then
-            killall conky
-        fi
-
-        # Find the chosen conkys and start them
-        for name in ${retConky[*]};do       # loop through checkmarked conky names
-            for ((j=0; j<${#conkysPath[*]}; j++));do  # traverse through elements
-                for f in ${conkysPath[j]};do    # compare with choice from dialog
-                    display=$( echo "$f" | awk -F"/" '{print $(NF-1)"/"$NF}')
-                    if [[ $display = $name ]];then
-                        echo -e "conky -c $f & sleep 1s" >> "$SESSIONFILE"
-                        #start the conky (adjust the sleep time if required)
-                        conky -c "$f" & sleep 1s
-                    fi
-                done
-            done
-        done
-    fi
-done
 rm "$TEMPFILE"
 
 exit 0
